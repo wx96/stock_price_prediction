@@ -1,0 +1,428 @@
+---
+title: "Stock Price Prediction"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r cars}
+## Load libraries
+library(dplyr)
+library(readr)
+library(janitor)
+library(tidyr)
+
+```
+
+```{r}
+## Read data
+path_stock <- 'D:/RMDS/stock_price_prediction/full_dataset/stock_closing_nyse.csv'
+path_sentiment_global <- 'D:/RMDS/stock_price_prediction/full_dataset/news-sentiment-index_global.csv' # keyword: exxon, oil, gas
+path_sentiment_finance <- 'D:/RMDS/stock_price_prediction/full_dataset/news-sentiment-index_finance.csv' # keyword: exxon, oil, gas
+path_stock_index <- 'D:/RMDS/stock_price_prediction/full_dataset/stock_index.csv'
+path_price_commodity <- 'D:/RMDS/stock_price_prediction/full_dataset/price_commodity.csv' # filter: crude, gasoline, settle price
+path_interest_rate <- 'D:/RMDS/stock_price_prediction/full_dataset/interest_rate.csv' # filter: monthly, exclude forecast
+path_inventory_outlook <- 'D:/RMDS/stock_price_prediction/full_dataset/inventory_outlook.csv' # filter: crude, Us, monthly
+path_jodi_demand <- 'D:/RMDS/stock_price_prediction/full_dataset/jodi_demand.csv' # filter: jodi, demand
+path_mobility_apple <- 'D:/RMDS/stock_price_prediction/full_dataset/mobility_apple.csv' # filter: US, sub-region
+path_mobility_google <- 'D:/RMDS/stock_price_prediction/full_dataset/mobility_google.csv' # filter: US
+
+stock_nyse <- read_csv(path_stock) %>% janitor::clean_names() 
+stock_nyse <- stock_nyse %>% mutate(date = as.Date(date_value),stock_price = value) %>% arrange(date) %>% filter(ticker=="XOM") %>% select(date,stock_price)
+
+sentiment_global <- read_csv(path_sentiment_global) %>% janitor::clean_names() 
+sentiment_global <- sentiment_global %>% mutate(date = as.Date(date_time), sentiment_global_index = index,
+                                                sentiment_global_count = count) %>% arrange(date) %>% select(date,sentiment_global_index,sentiment_global_count)
+
+sentiment_finance <- read_csv(path_sentiment_finance) %>% janitor::clean_names() 
+sentiment_finance <- sentiment_finance %>% mutate(date = as.Date(date_time), sentiment_finance_index = index,
+                                                sentiment_finance_count = count) %>% arrange(date) %>%
+  select(date,sentiment_finance_index,sentiment_finance_count)
+
+stock_index <- read_csv(path_stock_index) %>% janitor::clean_names() 
+stock_index <- stock_index %>% mutate(date = as.Date(date_value)) %>% arrange(date) %>% select(-date_value) %>% spread(description,value) %>% janitor::clean_names() %>% 
+  select(date,dow_jones_composite_average,dow_jones_industrial_average,dow_jones_transportation_average,dow_jones_utility_average,s_p_500)
+
+price_commodity <- read_csv(path_price_commodity) %>% janitor::clean_names() 
+price_commodity <- price_commodity %>% mutate(date = as.Date(date_value)) %>% arrange(date) %>% select(-date_value) %>% spread(commodity_and_exchange,value) %>% janitor::clean_names() %>% select(date,ice_brent_crude_oil_futures,nymex_crude_oil_futures,nymex_rbob_gasoline_futures)
+
+interest_rate <- read_csv(path_interest_rate) %>% janitor::clean_names() 
+interest_rate <- interest_rate %>% mutate(date = as.Date(date_value)) %>% arrange(date) %>% select(-date_value) %>% 
+  filter(region == "UNITED STATES")%>% spread(indicator,value) %>% janitor::clean_names() %>% select(date,long_term_interest_rates,short_term_interest_rates)
+
+inventory_outlook <- read_csv(path_inventory_outlook) %>% janitor::clean_names() 
+inventory_outlook$sector_unit <- paste0(inventory_outlook$sub_sector_level_3,'_',inventory_outlook$unit)
+inventory_outlook <- inventory_outlook %>% mutate(date = as.Date(date_value)) %>% arrange(date) %>% select(date,sector_unit,value) %>% 
+  spread(sector_unit,value) %>% janitor::clean_names()
+
+jodi_demand <- read_csv(path_jodi_demand) %>% janitor::clean_names() 
+jodi_demand <- jodi_demand %>% mutate(date = as.Date(date_value), jodi_demand_kbd = value) %>% arrange(date) %>% select(-date_value) %>%
+  filter(country == "UNITED STATES") %>% select(date, jodi_demand_kbd)
+
+mobility_apple <- read_csv(path_mobility_apple) %>% janitor::clean_names() 
+mobility_apple <- mobility_apple %>% mutate(date = as.Date(date_value)) %>% select(date,transportation_type,value) %>%
+  group_by(date, transportation_type) %>% mutate(trans_val = mean(value)) %>% arrange(date) %>% ungroup() %>% select(date,transportation_type,trans_val)
+mobility_apple <- mobility_apple[!duplicated(mobility_apple),]
+mobility_apple <- mobility_apple %>% spread(transportation_type,trans_val) %>% janitor::clean_names()
+
+mobility_google <- read_csv(path_mobility_google) %>% janitor::clean_names() 
+mobility_google <- mobility_google %>% mutate(date = as.Date(date_value)) %>% select(date,indicator,value) %>%
+  group_by(date, indicator) %>% mutate(trans_val = mean(value)) %>% arrange(date) %>% ungroup() %>% select(date,indicator,trans_val)
+mobility_google <- mobility_google[!duplicated(mobility_google),]
+mobility_google <- mobility_google %>% spread(indicator,trans_val) %>% janitor::clean_names()
+
+full_data <- stock_nyse %>% left_join(sentiment_global) %>% left_join(sentiment_finance) %>% left_join(stock_index) %>% left_join(price_commodity) %>% 
+  left_join(interest_rate) %>% left_join(inventory_outlook) %>% left_join(jodi_demand) %>% left_join(mobility_apple) %>% left_join(mobility_google)
+full_data <- full_data %>% filter(date>='2018-01-01')
+
+full_data <- full_data %>% fill(jodi_demand_kbd,.direction = "down")
+full_data <- full_data %>% fill(long_term_interest_rates,.direction = "down")
+full_data <- full_data %>% fill(short_term_interest_rates,.direction = "down")
+full_data <- full_data %>% fill(crude_oil_and_liquid_fuels_supply_million_barrels_per_day,.direction = "up")
+full_data <- full_data %>% fill(crude_oil_inventory_excluding_spr_million_barrels_end_of_period,.direction = "up")
+full_data <- full_data %>% fill(imported_crude_oil_real_price_real_dollars_per_barrel,.direction = "up")
+full_data <- full_data %>% fill(opec_total_crude_oil_production_capacity_million_barrels_per_day,.direction = "up")
+full_data <- full_data %>% fill(u_s_crude_oil_production_million_barrels_per_day,.direction = "up")
+
+full_data <- full_data %>% filter(!is.na(stock_price))
+#full_data[is.na(full_data)] <- 999
+
+
+write.csv(full_data,"D:/RMDS/stock_price_prediction/full_data_processed.csv")
+
+```
+
+
+```{r}
+#Correlation Plot Sentiment
+library(corrplot)
+cor.data <- cor(full_data[,c(2,3,4,5,6)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+
+
+```
+
+
+```{r}
+#Correlation Plot Stock Index
+library(corrplot)
+cor.data <- cor(full_data[,c(2,7,8,9,10,11)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+```
+
+
+```{r}
+
+#Correlation Plot Futures
+library(corrplot)
+cor.data <- cor(full_data[,c(2,12,13,14)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+
+
+```
+
+
+```{r}
+
+#Correlation Plot Interest Rates
+library(corrplot)
+cor.data <- cor(full_data[,c(2,15,16)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+
+
+```
+
+
+```{r}
+
+#Correlation Plot Inventory Outlook
+library(corrplot)
+cor.data <- cor(full_data[,c(2,17,18,19,20,21)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+
+```
+
+```{r}
+#Correlation Plot Jodi Demand
+library(corrplot)
+cor.data <- cor(full_data[,c(2,22)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+
+```
+
+
+```{r}
+
+#Correlation Plot Mobility Apple
+library(corrplot)
+cor.data <- cor(full_data[,c(2,23,24,25)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+```
+```{r}
+#Correlation Plot Mobility Google
+library(corrplot)
+cor.data <- cor(full_data[,c(2,26,27,28,29,30,31)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+
+
+```
+```{r}
+library(ggplot2)
+ggplot(full_data, aes(x=date, y=stock_price)) +
+  geom_line( color="steelblue") + 
+  geom_point() +
+  xlab("") +
+  #theme_ipsum() +
+  theme(axis.text.x=element_text(angle=60, hjust=1)) +
+  scale_x_date(limit=c(as.Date("2018-01-01"),as.Date("2021-03-05"))) #+
+  #ylim(0,1.5)
+
+```
+
+
+```{r}
+
+ggplot(full_data, aes(x=date)) +
+  
+  geom_line( aes(y=stock_price)) + 
+  geom_line( aes(y=jodi_demand_kbd)) + 
+  ylim(0,100) +
+  
+  scale_y_continuous(
+    
+    # Features of the first axis
+    name = "First Axis",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~. + 20000,name="Second Axis")
+  )
+
+```
+
+
+```{r}
+
+ggplot(full_data, aes(x = date)) +
+  geom_line(aes(y=stock_price)) + 
+  geom_line( aes(y=jodi_demand_kbd)) +
+  scale_y_continuous("jodi_demand_kbd", sec.axis = sec_axis(~ . + 20000, name = derive()))
+
+```
+
+
+
+```{r}
+
+##using sentiment data 2020
+sentiment_dataset <- read.csv("D:/RMDS/stock_price_prediction/sample_dataset/ave-daily-news-sentiment-exxon-2020.csv") %>% janitor::clean_names()
+sentiment_dataset <- sentiment_dataset %>% mutate(date = as.POSIXct(strptime(i_date_time, "%m/%d/%Y"), tz="Asia/Kuala_Lumpur")) %>% select(-i_date_time)
+sentiment_dataset <- sentiment_dataset %>% left_join(stock_nyse, by = "date") %>% select(date,stock_price,daily_news_sentiment)
+sentiment_dataset <- sentiment_dataset[complete.cases(sentiment_dataset),]
+
+
+cor.data <- cor(sentiment_dataset[,c(2,3)],use="complete.obs")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cor.data, method = "color", col = col(200), number.cex = .7,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank"
+         )
+
+
+#sentiment_dataset <- full_data %>% select(stock_price,sentiment_finance_index,sentiment_global_index)
+#sentiment_dataset <- sentiment_dataset[complete.cases(sentiment_dataset),]
+set.seed(101)
+trainindices <- sample(1:nrow(sentiment_dataset), 0.7*nrow(sentiment_dataset))
+train <- sentiment_dataset[trainindices,,drop=FALSE]
+test <- sentiment_dataset[-trainindices,,drop=FALSE]
+
+
+ggplot(data=train, aes(x = stock_price)) + geom_histogram() + theme_minimal() +labs(title = "Distribution of Price in Train Set")
+ggplot(data=train, aes(x = 1, y = stock_price)) + geom_boxplot() + theme_minimal() +labs("Boxplot of Price in Train Set") + xlab("")
+
+#Regression Model
+#train <- select(train, c("stock_price","sentiment_global_index","sentiment_finance_index"))
+stock_price_lm <- lm(formula = stock_price ~ ., data = train)
+summary(stock_price_lm) # number of stars show the significance of variable
+
+ggplot(data = data.frame(fitted = stock_price_lm$fitted.values, 
+                         residuals = stock_price_lm$residuals), 
+       aes(fitted, residuals)) + 
+  geom_point() +
+  theme_minimal() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(title = "Residuals vs Fitted values", subtitle = "Ideally this should be randomly distributed on either side of red line.")
+
+#Performance on test
+#test <- select(test, c("stock_price","sentiment_global_index","sentiment_finance_index"))
+
+predicted_stock_price <- predict(stock_price_lm, dplyr::select(test,-stock_price))
+predicted_train <- predict(stock_price_lm,dplyr::select(train,-stock_price))
+RMSE_train <- Metrics::rmse(actual = train$stock_price,predicted = predicted_train)
+RMSE_lm <- Metrics::rmse(actual = test$stock_price, predicted = predicted_stock_price)
+cat("\nRoot mean square error on the test data: ", round(RMSE_lm, 2), "\n")
+```
+```{r}
+
+jodi_demand_data <- full_data %>% select(date,stock_price,jodi_demand_kbd)
+jodi_demand_data <- jodi_demand_data[complete.cases(jodi_demand_data),]
+dataset <- jodi_demand_data
+
+set.seed(101)
+trainindices <- sample(1:nrow(dataset), 0.7*nrow(dataset))
+train <- dataset[trainindices,,drop=FALSE]
+test <- dataset[-trainindices,,drop=FALSE]
+
+
+ggplot(data=train, aes(x = stock_price)) + geom_histogram() + theme_minimal() +labs(title = "Distribution of Price in Train Set")
+ggplot(data=train, aes(x = 1, y = stock_price)) + geom_boxplot() + theme_minimal() +labs("Boxplot of Price in Train Set") + xlab("")
+
+#Regression Model
+#train <- select(train, c("stock_price","sentiment_global_index","sentiment_finance_index"))
+stock_price_lm <- lm(formula = stock_price ~ ., data = train)
+summary(stock_price_lm) # number of stars show the significance of variable
+
+ggplot(data = data.frame(fitted = stock_price_lm$fitted.values, 
+                         residuals = stock_price_lm$residuals), 
+       aes(fitted, residuals)) + 
+  geom_point() +
+  theme_minimal() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(title = "Residuals vs Fitted values", subtitle = "Ideally this should be randomly distributed on either side of red line.")
+
+#Performance on test
+#test <- select(test, c("stock_price","sentiment_global_index","sentiment_finance_index"))
+
+predicted_stock_price <- predict(stock_price_lm, dplyr::select(test,-stock_price))
+predicted_train <- predict(stock_price_lm,dplyr::select(train,-stock_price))
+RMSE_train <- Metrics::rmse(actual = train$stock_price,predicted = predicted_train)
+RMSE_lm <- Metrics::rmse(actual = test$stock_price, predicted = predicted_stock_price)
+cat("\nRoot mean square error on the test data: ", round(RMSE_lm, 2), "\n")
+
+
+```
+
+
+```{r}
+jodi_demand_data <- full_data %>% select(stock_price,jodi_demand_kbd)
+jodi_demand_data <- jodi_demand_data[complete.cases(jodi_demand_data),]
+dataset <- jodi_demand_data
+
+set.seed(101)
+trainindices <- sample(1:nrow(dataset), 0.7*nrow(dataset))
+train <- dataset[trainindices,,drop=FALSE]
+test <- dataset[-trainindices,,drop=FALSE]
+
+####Random Forest
+library(randomForest)
+model_rf <- randomForest(
+  x = select(train, -stock_price), y = train$stock_price,
+  ntree = 500,
+  mtry = 10,
+  sampsize = c(100),
+  replace=FALSE
+)
+
+# Predictions
+prediction_rf <- predict(object = model_rf, newdata = select(test, -stock_price)) %>% as.data.frame()
+colnames(prediction_rf) <- "predicted_stock_price"
+test_result <- cbind(test,prediction_rf)
+test_result <- test_result %>% mutate(error = abs(stock_price-predicted_stock_price), mape = error/stock_price*100)
+mean(test_result$mape)
+
+# library(forcats)
+# model_rf$importance %>% as.data.frame() %>% tibble::rownames_to_column() %>%  arrange(desc(MeanDecreaseGini)) %>% mutate(rowname = fct_reorder(rowname, MeanDecreaseGini, .desc = FALSE)) %>% 
+#   ggplot(aes(x = rowname, y = MeanDecreaseGini)) + 
+#   geom_col() + 
+#   coord_flip() + 
+#   theme_minimal() +
+#   labs(title = "Feature sorted by contributing to readmission")
+
+
+```
+
+
+```{r}
+
+dataset <- full_data %>% select(stock_price, long_term_interest_rates,short_term_interest_rates,jodi_demand_kbd)
+dataset <- dataset[complete.cases(dataset),]
+
+set.seed(101)
+trainindices <- sample(1:nrow(dataset), 0.7*nrow(dataset))
+train <- dataset[trainindices,,drop=FALSE]
+test <- dataset[-trainindices,,drop=FALSE]
+
+####Random Forest
+library(randomForest)
+model_rf <- randomForest(
+  x = select(train, -stock_price), y = train$stock_price,
+  ntree = 500,
+  mtry = 10,
+  sampsize = c(100),
+  replace=FALSE
+)
+
+# Predictions
+prediction_rf <- predict(object = model_rf, newdata = select(test, -stock_price)) %>% as.data.frame()
+colnames(prediction_rf) <- "predicted_stock_price"
+test_result <- cbind(test,prediction_rf)
+test_result <- test_result %>% mutate(error = abs(stock_price-predicted_stock_price), mape = error/stock_price*100) 
+mean(test_result$mape)
+
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
